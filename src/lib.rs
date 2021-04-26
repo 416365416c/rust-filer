@@ -1,6 +1,6 @@
 use std::collections::BTreeSet; // So that the values are in sorted order
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use regex::Regex;
 use lazy_static::lazy_static;
@@ -11,7 +11,7 @@ lazy_static! {
     static ref LABEL_RE: Regex = Regex::new(r"^X-Gmail-Labels: ").unwrap();
 }
 
-const INF = 99999; // For label selection algorithm
+const INF: u32 = 99999; // For label selection algorithm
 
 fn get_file(input: &str) -> File {
     let input_path = Path::new(input);
@@ -27,7 +27,7 @@ fn get_file(input: &str) -> File {
 
 fn get_labels(line: &str) -> Vec<&str> {
     // Skip the "X-Gmail-Labels: ", then trim
-    return line_str[15..].trim().split(",");
+    return line[15..].trim().split(",").collect();
 }
 
 pub fn list_labels(input: &str) {
@@ -42,7 +42,7 @@ pub fn list_labels(input: &str) {
             Ok(line_str) => {
                 if LABEL_RE.is_match(&line_str) {
                     log::trace!("Line match: {}", line_str);
-                    for label in get_labels(line_str) {
+                    for label in get_labels(&line_str) {
                         labels.insert(String::from(label));
                     }
                 }
@@ -57,27 +57,58 @@ pub fn list_labels(input: &str) {
     }
 }
 
-//TODO: OO this, mail is a class with new and write
-
 struct Mail {
-    mut mail_buffer: String,
-    pub mut target_mbox: String, //Some/None type?
+    mail_buffer: String,
+    target_mbox: Option<String>,
 }
 
 impl Mail {
-    pub fn new(&self, misc: bool) {
-        if (misc) {
-            target_mbox = String::from("misc");
+    pub fn new(misc: bool) -> Mail {
+        let target_mbox: Option<String>;
+        if misc {
+            target_mbox = Some(String::from("misc"));
         } else {
-            target_mbox = String::from//HERE
+            target_mbox = None;
+        }
+
+        Mail {
+            mail_buffer: String::new(),
+            target_mbox,
         }
     }
-    pub fn append(&self, line: &str) {
-        self.mail_buffer.append(line);
+
+    pub fn append(&mut self, line: &str) {
+        self.mail_buffer += line;
+        self.mail_buffer += "\n";
     }
 
     pub fn write_to_mbox(&self) {
         // If mail_buffer empty or target_mbox none then skip
+        if self.mail_buffer.len() == 0 {
+            return;
+        }
+
+        let mbox_name = match &self.target_mbox {   
+            Some(target) => target,
+            None => return,
+        };
+
+        let mbox_path = Path::new(mbox_name);
+        let file_attempt = OpenOptions::new()
+                            .append(true)
+                            .create(true)
+                            .open(mbox_path);
+
+        let mut file = match file_attempt {
+            Err(msg) => panic!("Failure to open {}: {}", mbox_path.display(), msg),
+            Ok(file) => file,
+        };
+        
+        let write_attempt = file.write_all(self.mail_buffer.as_bytes());
+        match write_attempt {
+            Err(msg) => log::error!("Write error for {}: {}", mbox_path.display(), msg),
+            Ok(_any) => (),
+        }
     }
 }
 
@@ -92,12 +123,14 @@ pub fn file_mails(input: &str, allow: Vec<&str>, block: Vec<&str>, misc: bool) {
                     mail.write_to_mbox();
                     mail = Mail::new(misc);
                 } else if LABEL_RE.is_match(&line_str) {
-                    let mut allow_idx = INF;
-                    for label in get_labels(line_str) {
-                        if label in block { // If blocked, dest_str to NONE (still copying buf thou?)
-                            log::fatal!("NOT YET IMPLEMENTED");
-                        } else if label in allow { // Efficient?
-                            log::fatal!("NOT YET IMPLEMENTED");
+                    let mut allow_idx: u32 = INF;
+                    for label in get_labels(&line_str) {
+                        if block.contains(&label) {
+                            mail.target_mbox = None;
+                            break;
+                        } else if allow.contains(&label) { // Efficient?
+                            //TODO: Label priority
+                            mail.target_mbox = Some(String::from(label));
                         }
                     }
                 }
